@@ -2,8 +2,6 @@
 
 A C++ order book reconstruction system for NASDAQ TotalView-ITCH 5.0 binary feeds. Parses every book-mutating message type, maintains a per-instrument limit order book in memory, and serves current book state via a REST API.
 
-Built as a portfolio project targeting a systems/low-latency C++ role.
-
 ---
 
 ## What it does
