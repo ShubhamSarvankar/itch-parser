@@ -1,0 +1,7 @@
+build/
+data/*
+!data/.gitkeep
+.env
+.cache/
+*.o
+*.a
