@@ -491,3 +491,120 @@ TEST_F(BookEngineTest, SkippedUnknownRef_MultipleOpsAccumulate) {
 
     EXPECT_EQ(engine.skipped_unknown_ref(), 4u);
 }
+
+// Milestone 10 — last_update_timestamp coverage
+
+TEST_F(BookEngineTest, Timestamp_SetByAddOrder) {
+    itch::AddOrderMsg m;
+    m.stock_locate = 1;
+    m.order_ref    = 1;
+    m.side         = 'B';
+    m.shares       = 100;
+    m.price.raw    = 1000000;
+    m.timestamp    = 34200000000000ULL;
+    engine.apply(m);
+
+    auto snap = engine.build_snapshot_for_test();
+    ASSERT_NE(snap, nullptr);
+    auto it = snap->books.find("AAPL");
+    ASSERT_NE(it, snap->books.end());
+    EXPECT_EQ(it->second.last_update_timestamp, 34200000000000ULL);
+}
+
+TEST_F(BookEngineTest, Timestamp_UpdatedBySubsequentMutation) {
+    itch::AddOrderMsg add_msg;
+    add_msg.stock_locate = 1;
+    add_msg.order_ref    = 1;
+    add_msg.side         = 'B';
+    add_msg.shares       = 500;
+    add_msg.price.raw    = 1000000;
+    add_msg.timestamp    = 34200000000000ULL;
+    engine.apply(add_msg);
+
+    itch::OrderCancelMsg cancel_msg;
+    cancel_msg.order_ref        = 1;
+    cancel_msg.cancelled_shares = 200;
+    cancel_msg.timestamp        = 34200000001000ULL;
+    engine.apply(cancel_msg);
+
+    auto snap = engine.build_snapshot_for_test();
+    EXPECT_EQ(snap->books.at("AAPL").last_update_timestamp, 34200000001000ULL);
+}
+
+TEST_F(BookEngineTest, Timestamp_UpdatedByExecute) {
+    itch::AddOrderMsg add_msg;
+    add_msg.stock_locate = 1;
+    add_msg.order_ref    = 1;
+    add_msg.side         = 'S';
+    add_msg.shares       = 100;
+    add_msg.price.raw    = 1000100;
+    add_msg.timestamp    = 34200000000000ULL;
+    engine.apply(add_msg);
+
+    itch::OrderExecutedMsg exec_msg;
+    exec_msg.order_ref       = 1;
+    exec_msg.executed_shares = 50;
+    exec_msg.timestamp       = 34200000002000ULL;
+    engine.apply(exec_msg);
+
+    auto snap = engine.build_snapshot_for_test();
+    EXPECT_EQ(snap->books.at("AAPL").last_update_timestamp, 34200000002000ULL);
+}
+
+TEST_F(BookEngineTest, Timestamp_UpdatedByDelete) {
+    itch::AddOrderMsg add_msg;
+    add_msg.stock_locate = 1;
+    add_msg.order_ref    = 1;
+    add_msg.side         = 'B';
+    add_msg.shares       = 200;
+    add_msg.price.raw    = 1000000;
+    add_msg.timestamp    = 34200000000000ULL;
+    engine.apply(add_msg);
+
+    itch::OrderDeleteMsg del_msg;
+    del_msg.order_ref = 1;
+    del_msg.timestamp = 34200000003000ULL;
+    engine.apply(del_msg);
+
+    auto snap = engine.build_snapshot_for_test();
+    EXPECT_EQ(snap->books.at("AAPL").last_update_timestamp, 34200000003000ULL);
+}
+
+TEST_F(BookEngineTest, Timestamp_UpdatedByReplace) {
+    itch::AddOrderMsg add_msg;
+    add_msg.stock_locate = 1;
+    add_msg.order_ref    = 1;
+    add_msg.side         = 'S';
+    add_msg.shares       = 400;
+    add_msg.price.raw    = 501000;
+    add_msg.timestamp    = 34200000000000ULL;
+    engine.apply(add_msg);
+
+    itch::OrderReplaceMsg rep_msg;
+    rep_msg.original_order_ref = 1;
+    rep_msg.new_order_ref      = 2;
+    rep_msg.shares             = 350;
+    rep_msg.price.raw          = 501500;
+    rep_msg.timestamp          = 34200000004000ULL;
+    engine.apply(rep_msg);
+
+    auto snap = engine.build_snapshot_for_test();
+    EXPECT_EQ(snap->books.at("AAPL").last_update_timestamp, 34200000004000ULL);
+}
+
+TEST_F(BookEngineTest, Timestamp_ZeroForInstrumentWithNoBookActivity) {
+    // Register a second instrument but never apply any book-mutating messages
+    itch::InstrumentInfo info;
+    info.stock_locate   = 2;
+    info.symbol         = "MSFT";
+    info.trading_state  = 'T';
+    info.round_lot_size = 100;
+    engine.register_instrument(info);
+
+    auto snap = engine.build_snapshot_for_test();
+
+    // MSFT registered but no book entry — must appear with timestamp 0
+    auto it = snap->books.find("MSFT");
+    ASSERT_NE(it, snap->books.end());
+    EXPECT_EQ(it->second.last_update_timestamp, 0u);
+}

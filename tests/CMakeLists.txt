@@ -2,6 +2,8 @@ add_executable(itch_tests
     test_price.cpp
     test_parser.cpp
     test_book_engine.cpp
+    test_rest.cpp
+    test_udp_feed_reader.cpp
 )
 
 target_include_directories(itch_tests PRIVATE

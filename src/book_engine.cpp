@@ -263,6 +263,10 @@ void OrderBookEngine::log_summary() const {
     }
 }
 
+std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot_for_test() const {
+    return build_snapshot();
+}
+
 void OrderBookEngine::set_pipeline_complete() {
     pipeline_complete_ = true;
     // Publish a final snapshot so the REST layer sees the last state
@@ -296,6 +300,9 @@ std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot() const {
         book_snap.symbol        = info.symbol;
         book_snap.trading_state = info.trading_state;
         book_snap.last_update_timestamp = book.last_update_timestamp;
+        book_snap.stock_locate  = info.stock_locate;
+        book_snap.round_lot_size= info.round_lot_size;
+        book_snap.market_category = info.market_category;
 
         for (const auto& [price, level] : book.bids) {
             book_snap.bids.push_back({
@@ -325,6 +332,9 @@ std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot() const {
             empty_snap.symbol        = info.symbol;
             empty_snap.trading_state = info.trading_state;
             empty_snap.last_update_timestamp = 0;
+            empty_snap.stock_locate  = info.stock_locate;
+            empty_snap.round_lot_size= info.round_lot_size;
+            empty_snap.market_category = info.market_category;
             snap->books[info.symbol] = std::move(empty_snap);
         }
     }

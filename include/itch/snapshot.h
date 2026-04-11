@@ -18,6 +18,9 @@ struct OrderBookSnapshot {
     std::vector<PriceLevelSnapshot> bids{};  // descending price
     std::vector<PriceLevelSnapshot> asks{};  // ascending price
     uint64_t                      last_update_timestamp{};  // 0 = no book activity yet
+    uint16_t                      stock_locate{};
+    uint32_t                      round_lot_size{};         // 0 = unknown (placeholder instrument)
+    char                          market_category{};        // 0 = unknown
 };
 
 struct SystemSnapshot {

@@ -35,6 +35,9 @@ public:
 
     void register_instrument(const InstrumentInfo& info);
 
+    // Test accessor — triggers a snapshot build from current state
+    std::shared_ptr<SystemSnapshot> build_snapshot_for_test() const;
+
 private:
     void handle(const AddOrderMsg& m);
     void handle(const AddOrderMPIDMsg& m);

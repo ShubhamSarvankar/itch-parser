@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <string>
 #include <cctype>
+#include <chrono>
 
 namespace itch {
 
@@ -66,13 +67,20 @@ void RestServer::setup_routes() {
                 {"messages_processed",  0},
                 {"instruments_tracked", 0},
                 {"snapshot_timestamp",  0},
+                {"snapshot_age_ms",     nullptr},
                 {"pipeline_complete",   false}
             };
         } else {
+            auto now_ms = static_cast<int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()
+                ).count()
+            );
             j = {
                 {"messages_processed",  snap->messages_processed},
                 {"instruments_tracked", snap->books.size()},
                 {"snapshot_timestamp",  snap->snapshot_timestamp},
+                {"snapshot_age_ms",     now_ms - static_cast<int64_t>(snap->snapshot_timestamp)},
                 {"pipeline_complete",   snap->pipeline_complete}
             };
         }
@@ -95,9 +103,16 @@ void RestServer::setup_routes() {
         for (const auto& [symbol, book] : snap->books) {
             json entry;
             entry["symbol"]                   = book.symbol;
+            entry["stock_locate"]             = book.stock_locate;
             entry["trading_state"]            = std::string(1, book.trading_state);
             entry["trading_state_description"]= trading_state_description(
                                                     book.trading_state);
+            entry["market_category"] = (book.market_category != '\0')
+                                           ? json(std::string(1, book.market_category))
+                                           : json(nullptr);
+            entry["round_lot_size"]  = (book.round_lot_size != 0)
+                                           ? json(book.round_lot_size)
+                                           : json(nullptr);
             instruments.push_back(entry);
         }
 

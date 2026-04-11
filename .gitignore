@@ -5,3 +5,4 @@ data/*
 .cache/
 *.o
 *.a
+PROJECT_STRUCTURE.md

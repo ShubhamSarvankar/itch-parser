@@ -43,16 +43,26 @@ FetchContent_Declare(googlebenchmark
 set(BENCHMARK_ENABLE_TESTING OFF)
 FetchContent_MakeAvailable(googlebenchmark)
 
+FetchContent_Declare(concurrentqueue
+    GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
+    GIT_TAG        v1.0.4
+)
+FetchContent_MakeAvailable(concurrentqueue)
+
 set(CORE_SOURCES
     src/feed_reader.cpp
     src/parser.cpp
     src/book_engine.cpp
     src/snapshot_publisher.cpp
     src/rest_server.cpp
+    src/udp_feed_reader.cpp
 )
 
 add_library(itch_core STATIC ${CORE_SOURCES})
-target_include_directories(itch_core PUBLIC include)
+target_include_directories(itch_core PUBLIC
+    include
+    ${concurrentqueue_SOURCE_DIR}
+)
 target_link_libraries(itch_core PUBLIC
     httplib::httplib
     Threads::Threads
