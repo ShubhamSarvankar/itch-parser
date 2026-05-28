@@ -1,9 +1,21 @@
+// bench/bench_book_engine.cpp
+//
+// Targeted micro benchmarks for delete, replace, execute. Seeded with N
+// resting orders across 100 distinct prices.
+//
+// NOTE: the original BM_AddOrder in this file was misleading: it always
+// added at the same price, so after the first insert every call was just
+// ++level.total_shares. The std::map insert was not measured. That bench
+// is replaced by BM_AddOrder_HotBand / BM_AddOrder_ColdPrice in
+// bench_mixed_workload.cpp.
+//
+// For honest end-to-end numbers see BM_ApplyMixed_Synth /
+// BM_ApplyMixed_Capture in bench_mixed_workload.cpp.
+
 #include <benchmark/benchmark.h>
+#include <memory>
 #include "book_engine.h"
 #include "snapshot_publisher.h"
-#include <memory>
-
-// Fixtures — pre-constructed message structs, no parsing in the loop
 
 static itch::AddOrderMsg make_add(uint64_t ref, char side,
                                    uint32_t shares, uint32_t price_raw) {
@@ -46,7 +58,6 @@ static itch::OrderExecutedMsg make_execute(uint64_t ref, uint32_t shares) {
     return m;
 }
 
-// Seed engine with one instrument and N resting orders
 static void seed_engine(itch::OrderBookEngine& engine, int n_orders) {
     itch::InstrumentInfo info;
     info.stock_locate   = 1;
@@ -54,7 +65,7 @@ static void seed_engine(itch::OrderBookEngine& engine, int n_orders) {
     info.trading_state  = 'T';
     info.round_lot_size = 100;
     engine.register_instrument(info);
-    engine.set_snapshot_interval(UINT64_MAX);  // disable snapshot publishing
+    engine.set_snapshot_interval(UINT64_MAX);
 
     for (int i = 0; i < n_orders; ++i) {
         engine.apply(make_add(
@@ -66,28 +77,8 @@ static void seed_engine(itch::OrderBookEngine& engine, int n_orders) {
     }
 }
 
-// Benchmarks
-
-static void BM_AddOrder(benchmark::State& state) {
-    itch::SnapshotPublisher publisher;
-    itch::OrderBookEngine   engine(publisher);
-    itch::InstrumentInfo info;
-    info.stock_locate = 1; info.symbol = "AAPL";
-    info.trading_state = 'T'; info.round_lot_size = 100;
-    engine.register_instrument(info);
-    engine.set_snapshot_interval(UINT64_MAX);
-
-    uint64_t ref = 1;
-    for (auto _ : state) {
-        engine.apply(make_add(ref++, 'B', 100, 1000000));
-    }
-    state.SetItemsProcessed(state.iterations());
-}
-BENCHMARK(BM_AddOrder);
-
 static void BM_DeleteOrder(benchmark::State& state) {
     int n = static_cast<int>(state.range(0));
-
     itch::SnapshotPublisher publisher;
     auto engine = std::make_unique<itch::OrderBookEngine>(publisher);
     seed_engine(*engine, n);
@@ -114,9 +105,8 @@ static void BM_ReplaceOrder(benchmark::State& state) {
     seed_engine(engine, static_cast<int>(state.range(0)));
 
     uint64_t next_ref = static_cast<uint64_t>(state.range(0)) + 1;
-    int      idx      = 0;
-    int      n        = static_cast<int>(state.range(0));
-
+    int idx = 0;
+    int n   = static_cast<int>(state.range(0));
     for (auto _ : state) {
         uint64_t orig = static_cast<uint64_t>((idx % n) + 1);
         engine.apply(make_replace(orig, next_ref++, 200, 1000050));
@@ -131,9 +121,8 @@ static void BM_ExecuteOrder(benchmark::State& state) {
     itch::OrderBookEngine   engine(publisher);
     seed_engine(engine, static_cast<int>(state.range(0)));
 
-    // Partial execute (50 of 100 shares) so orders stay alive
-    int   idx = 0;
-    int   n   = static_cast<int>(state.range(0));
+    int idx = 0;
+    int n   = static_cast<int>(state.range(0));
     for (auto _ : state) {
         uint64_t ref = static_cast<uint64_t>((idx % n) + 1);
         engine.apply(make_execute(ref, 1));

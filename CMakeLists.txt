@@ -43,6 +43,31 @@ FetchContent_Declare(googlebenchmark
 set(BENCHMARK_ENABLE_TESTING OFF)
 FetchContent_MakeAvailable(googlebenchmark)
 
+# HdrHistogram_c for nanosecond latency histograms in bench_replay and
+# the realistic-mix benchmark. Optional: build skips it gracefully if
+# the FetchContent fetch fails (e.g. offline build).
+FetchContent_Declare(hdr_histogram
+    GIT_REPOSITORY https://github.com/HdrHistogram/HdrHistogram_c.git
+    GIT_TAG        0.11.8
+)
+set(HDR_HISTOGRAM_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(HDR_HISTOGRAM_BUILD_SHARED   OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(hdr_histogram)
+if(TARGET hdr_histogram_static)
+    set(ITCH_HAVE_HDR ON CACHE INTERNAL "HdrHistogram_c is available")
+else()
+    set(ITCH_HAVE_HDR OFF CACHE INTERNAL "HdrHistogram_c not available")
+endif()
+
+# ankerl::unordered_dense::map - flat hash table, drop-in for std::unordered_map.
+# Single header, MIT. 2-5x faster on integer keyed hot paths.
+FetchContent_Declare(unordered_dense
+    GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
+    GIT_TAG        v4.4.0
+)
+FetchContent_MakeAvailable(unordered_dense)
+set(ITCH_HAVE_DENSE_MAP ON CACHE INTERNAL "ankerl::unordered_dense available")
+
 FetchContent_Declare(concurrentqueue
     GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
     GIT_TAG        v1.0.4
@@ -63,6 +88,10 @@ target_include_directories(itch_core PUBLIC
     include
     ${concurrentqueue_SOURCE_DIR}
 )
+if(ITCH_HAVE_DENSE_MAP)
+    target_link_libraries(itch_core PUBLIC unordered_dense::unordered_dense)
+    target_compile_definitions(itch_core PUBLIC ITCH_HAVE_DENSE_MAP=1)
+endif()
 target_link_libraries(itch_core PUBLIC
     httplib::httplib
     Threads::Threads

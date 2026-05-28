@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#ifdef ITCH_HAVE_DENSE_MAP
+#include <ankerl/unordered_dense.h>
+#endif
 #include <string>
 #include "itch/messages.h"
 #include "itch/order_record.h"
@@ -10,6 +13,12 @@
 #include "itch/snapshot.h"
 
 namespace itch {
+
+#ifdef ITCH_HAVE_DENSE_MAP
+template <class K, class V> using fast_map = ankerl::unordered_dense::map<K, V>;
+#else
+template <class K, class V> using fast_map = std::unordered_map<K, V>;
+#endif
 
 class SnapshotPublisher;
 
@@ -56,9 +65,9 @@ private:
     void maybe_publish_snapshot();
     std::shared_ptr<SystemSnapshot> build_snapshot() const;
 
-    std::unordered_map<uint64_t, OrderRecord>    order_index_;
-    std::unordered_map<uint16_t, OrderBook>      books_;
-    std::unordered_map<uint16_t, InstrumentInfo> instruments_;
+    fast_map<uint64_t, OrderRecord>    order_index_;
+    fast_map<uint16_t, OrderBook>      books_;
+    fast_map<uint16_t, InstrumentInfo> instruments_;
 
     uint64_t messages_processed_{0};
     uint64_t skipped_unknown_ref_{0};

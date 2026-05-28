@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <map>
 #include <functional>
+#include <optional>
 #include "price.h"
 
 namespace itch {
@@ -21,6 +22,16 @@ struct OrderBook {
 
     // Asks: lowest price first (default ascending)
     std::map<Price, PriceLevel> asks{};
+
+    // Cached top of book. Empty when the side is empty. Updated by the
+    // engine on insert / erase of the best level. Lets callers (notably
+    // /book/:symbol/top) read top-of-book without touching the std::map.
+    //
+    // Note: holding raw pointers into a std::map is safe across non-erasing
+    // operations because std::map does not invalidate iterators on insert.
+    // The engine resets these on level erase.
+    const PriceLevel* best_bid{nullptr};
+    const PriceLevel* best_ask{nullptr};
 };
 
 } // namespace itch

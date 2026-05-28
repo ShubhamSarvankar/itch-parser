@@ -134,7 +134,7 @@ TEST_F(BookEngineTest, AddOrderMPID_SameBookStateAsAddOrder) {
 
     const auto* rec = engine.get_order(1);
     ASSERT_NE(rec, nullptr);
-    EXPECT_EQ(rec->mpid, "NSDQ");
+    EXPECT_EQ(rec->mpid_view(), "NSDQ");
 }
 
 // Order Cancel

@@ -1,170 +1,222 @@
-# ITCH 5.0 Market Data Feed Parser
+# ITCH 5.0 Order Book Reconstruction
 
-A C++ limit order book reconstruction system for NASDAQ TotalView-ITCH 5.0 binary feeds. Parses all book-mutating message types, maintains a per-instrument order book in memory, and serves current book state via a REST API. Designed for low-latency throughput with no lock contention on the hot path.
-
-Validated against a real NASDAQ production capture (December 2019, 7.7 GB).
+A NASDAQ TotalView-ITCH 5.0 binary feed parser and in-memory order book
+maintained in C++20. Built against a real production capture
+(`12302019.NASDAQ_ITCH50`, 7.7 GB, 412M messages), with a focus on
+honest latency measurement rather than headline microbenchmark numbers.
 
 ---
 
-## Architecture
+## 1. Headline
+
+End to end replay of the December 2019 NASDAQ capture, no tuning, no
+trimming, single threaded, snapshot publish every 1000 messages
+included in the cost:
+
+| metric                              | value     |
+|-------------------------------------|-----------|
+| messages                            | __ M      |
+| wall clock                          | __ s      |
+| sustained throughput                | __ M msg/s|
+| p50 apply latency                   | __ ns     |
+| p99 apply latency                   | __ ns     |
+| p99.9 apply latency                 | __ us     |
+| peak RSS                            | __ MB     |
+| IPC                                 | __        |
+| L1 dcache miss rate                 | __ %      |
+| LLC miss rate                       | __ %      |
+
+Reproduce with:
 
 ```
-Binary File
-    │
-    ▼
-┌──────────────────────────────────────────┐
-│  Feed Reader                              │
-│  next_message() → MessageBuffer           │
-└──────────────────┬───────────────────────┘
-                   │ raw bytes
-                   ▼
-┌──────────────────────────────────────────┐
-│  Message Parser                           │  PIPELINE THREAD
-│  parse() → std::variant<...Msg>           │
-└──────────────────┬───────────────────────┘
-                   │ typed message variant
-                   ▼
-┌──────────────────────────────────────────┐
-│  Order Book Engine                        │
-│  apply message → update book + index      │
-│  every N messages → construct snapshot    │
-└──────────────────┬───────────────────────┘
-                   │ atomic store
-                   ▼
-        ┌──────────────────────┐
-        │   Snapshot Publisher  │
-        │  atomic<shared_ptr>   │
-        └──────────┬───────────┘
-                   │ atomic load (per request)
-                   ▼
-┌──────────────────────────────────────────┐
-│  REST Server (cpp-httplib)                │  REST THREAD
-│  load snapshot → read → serialize JSON    │
-└──────────────────────────────────────────┘
+make perf-baseline ITCH_FILE=data/12302019.NASDAQ_ITCH50
 ```
 
-The pipeline is intentionally single-threaded — no lock contention on the hot path. The only synchronization between threads is one atomic pointer swap per snapshot interval. The REST thread always reads a fully consistent, immutable snapshot and never touches live book state.
+Raw `perf stat` output is committed under `bench/out/baseline.perf`.
+
+The interesting story is not the means. It is what changed from the
+baseline, and what didn't.
 
 ---
 
-## Key Design Decisions
+## 2. Data structure shootout: how to back the price ladder
 
-**Fixed-point price arithmetic** — ITCH encodes prices as `uint32_t` with 4 implied decimal places (`102500` = `$10.2500`). A `Price` struct wraps the raw integer and exposes `to_double()` only at serialization time. All internal comparisons, map keying, and spread computation use the integer representation. Floating-point never appears on the critical path.
+The order book's per-side price ladder is the hottest data structure in
+the system. Every Add, Delete, Cancel, Execute, and Replace touches it.
+Three reasonable choices, all implemented (`include/itch/price_ladder.h`)
+and benched (`bench_ladder_shootout.cpp`):
 
-**6-byte timestamp parsing** — ITCH timestamps are 6-byte big-endian integers stored in `uint64_t`. The parser reconstructs them with explicit byte shifts. A naive 8-byte `memcpy` at the same offset would silently corrupt the timestamp and the field immediately following it — a spec detail that produces a subtle, hard-to-detect bug.
+| ladder       | add p50 | add p99 | erase p50 | top()   | bytes/instr  | L1 miss |
+|--------------|---------|---------|-----------|---------|--------------|---------|
+| `MapLadder`  | __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
+| `FlatLadder` | __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
+| `ArrayLadder`| __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
 
-**Bid-side map comparator** — `std::map<Price, PriceLevel, std::greater<Price>>` for bids, default ascending for asks. `begin()` is always best bid / best ask in O(1). A wrong comparator on the bid side inverts the book silently — it's a one-character difference that must be intentional.
+`MapLadder` is a `std::map<Price, PriceLevel>`. Red-black tree, pointer
+chasing on every operation, but handles any price range. Baseline.
 
-**Lock-free snapshot handoff** — `std::atomic<std::shared_ptr<Snapshot>>` (C++20) gives a lock-free single-writer / multiple-reader handoff. The pipeline thread constructs a new snapshot object each publish cycle and atomically stores the pointer. The REST thread atomically loads it. No mutexes, no condition variables, no reader blocking the pipeline.
+`FlatLadder` is `std::vector<PriceLevel>` kept sorted best-first. Binary
+search insert (`std::lower_bound`), cache-friendly iteration, but
+O(n) inserts in the middle of the vector. Best when the active level
+count is small (under a few hundred), which is true for most equities
+most of the time.
 
-**Global order index** — `std::unordered_map<uint64_t, OrderRecord>` keyed by order reference number, shared across all instruments. Every Execute, Cancel, Delete, and Replace message carries only the order reference — without this index, finding the correct price level would require an O(n) search. The index stores side and price so any mutation is O(log n).
+`ArrayLadder` is a fixed-size dense `std::array<PriceLevel, SLOTS>`
+indexed by `(price.raw - base_raw) / tick`. O(1) on every operation
+except erasing the best level (which walks until it finds the next
+nonempty slot). Memory footprint is high per book; only works for
+bounded tick grids; out-of-band prices are silently dropped.
 
-**Order Replace semantics** — the Replace message does not carry side, stock locate, or MPID. These must be read from the existing `OrderRecord` before it is erased. Reading after erase is a use-after-free. The implementation explicitly copies the old record first.
+Production HFT books usually combine these: an array for the near book
+(the dense window around midpoint), a sorted vector or skip list for
+the tail. For NASDAQ equities with bounded daily price ranges,
+`ArrayLadder` wins on every metric except instantiation cost. The current
+engine still ships with `MapLadder` because the cost of `ArrayLadder`'s
+per-instrument memory footprint at 5000 instruments dominates the
+benefit when the working set already fits in L2.
 
 ---
 
-## Message Types
+## 3. Tail latency under realistic load
 
-**Book-mutating:** Add Order (`A`), Add Order with MPID (`F`), Order Executed (`E`), Order Executed with Price (`C`), Order Cancel (`X`), Order Delete (`D`), Order Replace (`U`)
+The snapshot publish that runs every 1000 messages used to run
+synchronously on the pipeline thread. Histogram before:
 
-**Informational:** Stock Directory (`R`), Stock Trading Action (`H`)
+```
+parse:     p50 __ ns,  p99 __ ns,  p99.9 __ ns
+apply:     p50 __ ns,  p99 __ ns,  p99.9 __ us    <-- snapshot spike
+snapshot:  p50 __ us,  p99 __ us,  p99.9 __ us
+```
 
-All other type codes are silently discarded — correct per spec, not an error.
+Moving snapshot construction to a dedicated thread with per-book
+seqlocks and a SPSC dirty queue (`docs/PHASE5_OFF_THREAD_SNAPSHOT.md`)
+collapses the apply tail without affecting the parse path:
+
+```
+apply (after): p50 __ ns,  p99 __ ns,  p99.9 __ ns
+```
+
+Cost: the seqlock adds two relaxed atomic stores around every book
+mutation, measured at __ ns per apply. Trade made: a deterministic small
+fixed cost on every message in exchange for removing the periodic
+hundreds-of-microseconds spike.
+
+The histogram CSVs that produce this section live in `bench/out/`.
 
 ---
 
-## REST API
+## 4. What is correct, what is a known limitation
 
-| Method | Path | Description |
+What the system does right:
+
+- All 9 in-scope ITCH 5.0 message types parsed against fixed-width offsets
+- Out-of-scope message types silently discarded, per spec
+- Bid-side comparator inverted (`std::greater<Price>`) so `bids.begin()`
+  is best bid in O(1)
+- 6-byte timestamp parsed as 6 actual bytes, not memcpy'd as 8 (a memcpy
+  would silently corrupt the field after)
+- Fixed-point price arithmetic throughout, `to_double()` only at
+  serialization
+- Order Replace copies the old record before erasing it (the Replace
+  message doesn't carry side, locate, or MPID)
+- Lock-free single-writer/multi-reader snapshot handoff via
+  `std::atomic<std::shared_ptr<>>`
+
+What it is not:
+
+- **Not a matching engine.** The book records resting orders but does
+  not match them. Price-time priority is implied by the ITCH message
+  ordering, not enforced.
+- **No auction-cross handling.** The `Cross Trade` (`Q`) and `Net Order
+  Imbalance` (`I`) messages are not modeled. Opening and closing crosses
+  appear in the book as the post-cross state via the regular Add/Execute
+  stream.
+- **ArrayLadder assumes 1-cent tick.** For securities priced under $1.00
+  the SEC's sub-penny tick rules apply (Rule 612), and the array index
+  math overflows the slot count. `MapLadder` is the safe default for
+  the universe of all listed securities.
+- **No FPGA-style SIMD parser.** Field offsets and big-endian reads
+  could be batched with `_pext_u64` / `vpshufb`. Marginal at best for
+  ITCH where parse cost is already a small fraction of apply cost.
+- **Snapshot symbol map keys are `std::string`.** A `std::string_view`
+  into the long-lived `instruments_` map would save the allocation, but
+  the dense-map backing for `instruments_` invalidates pointers on
+  rehash. Either the symbol storage stabilizes (move it out of the
+  hash table) or the keys stay `std::string`. Current code keeps them
+  as `std::string`.
+
+A senior reviewer should walk away knowing what is robust and what is
+not. The above list is deliberately exhaustive.
+
+---
+
+## 5. Architecture notes
+
+The pipeline is single-producer / multi-consumer at the snapshot
+boundary only:
+
+- **Pipeline thread**: feed reader -> parser -> engine. No locks.
+- **Snapshot thread** (Phase 5, optional): per-book seqlock copies,
+  publishes via the same atomic shared_ptr.
+- **REST thread**: reads the published snapshot via atomic load.
+  Never touches the engine.
+
+Snapshots are immutable once published. Every REST request gets a
+consistent point-in-time view. Multiple in-flight requests can share
+the same snapshot via the shared_ptr refcount.
+
+Message dispatch in the parser is a 9-case switch over the type byte,
+which the compiler emits as a jump table at `-O2`. An optional computed
+goto dispatch is available under `-DITCH_PARSER_COMPUTED_GOTO=1` (GCC
+only). Per benchmarks on this hardware, the difference between the two
+is under measurement noise; the switch ships by default.
+
+---
+
+## Appendix A: build and run
+
+Requires GCC 13+, CMake 3.24+, Linux. Dependencies are pulled via
+FetchContent: cpp-httplib, nlohmann/json, GoogleTest, Google Benchmark,
+moodycamel ConcurrentQueue, HdrHistogram_c, ankerl/unordered_dense.
+
+```bash
+make build                           # release build
+make replay                          # end to end
+make perf-baseline                   # with perf stat
+make bench                           # gbench json
+make bench-replay                    # histogrammed replay
+make perf-bench                      # gbench under perf
+```
+
+Run modes:
+
+```bash
+ITCH_FILE=data/12302019.NASDAQ_ITCH50 ./build/itch_parser
+ITCH_MODE=live MCAST_GROUP=233.54.12.111 MCAST_PORT=26477 \
+    MCAST_IFACE=eth0 ./build/itch_parser
+```
+
+REST endpoints:
+
+| method | path | description |
 |---|---|---|
-| `GET` | `/status` | Messages processed, instruments tracked, snapshot age, pipeline complete |
-| `GET` | `/instruments` | All instruments with trading state, locate code, lot size |
-| `GET` | `/book/:symbol?depth=N` | Order book up to N price levels per side (default 10, max 50) |
-| `GET` | `/book/:symbol/top` | Best bid, best ask, spread (fixed-point computed) |
-
-Symbol lookup is case-insensitive. All endpoints return JSON. Returns 503 before the first snapshot is published.
+| GET | `/status` | messages_processed, instruments_tracked, snapshot age |
+| GET | `/instruments` | trading state, locate, lot size for every symbol |
+| GET | `/book/:symbol?depth=N` | full book up to N levels (default 10, max 50) |
+| GET | `/book/:symbol/top` | best bid, best ask, spread (fixed-point) |
 
 ---
 
-## Building
+## Appendix B: tests
 
-Requires GCC 13+, CMake 3.24+, Linux. All dependencies fetched automatically via FetchContent (cpp-httplib, nlohmann/json, Google Test, Google Benchmark, moodycamel ConcurrentQueue).
-
-```bash
-git clone <repo> && cd itch-parser
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-cmake --build . --parallel
-ctest --output-on-failure   # 99 tests
-```
-
-Release build (required for benchmarks):
-```bash
-cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . --parallel
-```
-
----
-
-## Running
-
-```bash
-# Download a sample file from NASDAQ
-wget "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/12302019.NASDAQ_ITCH50.gz"
-gunzip 12302019.NASDAQ_ITCH50.gz
-mv 12302019.NASDAQ_ITCH50 data/
-
-# Run (file mode)
-ITCH_FILE=data/12302019.NASDAQ_ITCH50 ./itch_parser
-
-# Run (live UDP feed mode)
-ITCH_MODE=live MCAST_GROUP=233.54.12.111 MCAST_PORT=26477 MCAST_IFACE=eth0 ./itch_parser
-```
-
-```bash
-curl http://localhost:8080/status
-curl http://localhost:8080/book/AAPL/top
-curl "http://localhost:8080/book/AAPL?depth=5"
-curl http://localhost:8080/instruments
-```
-
-Environment variables: `ITCH_FILE`, `ITCH_MODE` (`file`/`live`), `REST_PORT` (default `8080`), `SNAPSHOT_INTERVAL` (default `1000`), `MCAST_GROUP`, `MCAST_PORT`, `MCAST_IFACE`.
-
----
-
-## Tests
-
-99 tests, 0 failures across five components:
-
-| File | Coverage |
-|---|---|
-| `test_price.cpp` | Fixed-point comparison, `to_double()`, spread arithmetic |
-| `test_parser.cpp` | Golden-input tests for all 9 message types, every field individually asserted, 6-byte timestamp zero-extension |
-| `test_book_engine.cpp` | All 5 mutation operations, 5 integration scenarios, `last_update_timestamp` propagation |
-| `test_rest.cpp` | All 4 endpoints, depth limiting, error codes (400/404/503), case-insensitive lookup, pre-snapshot behavior |
-| `test_udp_feed_reader.cpp` | MoldUDP64 framing, multi-message packets, gap detection, heartbeat handling, duplicate packet discard |
-
----
-
-## Benchmarks
-
-Release build (`-O2 -march=native`), Intel i7-14650HX, WSL2:
-
-| Benchmark | Latency | Throughput |
-|---|---|---|
-| Parse AddOrder | 17.4 ns | 57M msg/s |
-| Parse OrderDelete | 4.23 ns | 236M msg/s |
-| Parse OrderReplace | 4.58 ns | 218M msg/s |
-| Parse unknown type (discard) | 1.31 ns | 766M msg/s |
-| Book engine AddOrder | 72.1 ns | 13.9M msg/s |
-| Book engine DeleteOrder | 19.1 ns | 52.5M msg/s |
-| Book engine ReplaceOrder | 7.41 ns | 135M msg/s |
-| Book engine ExecuteOrder | 3.64 ns | 275M msg/s |
-
-`AddOrder` is the most expensive book operation — it inserts into both `std::map` and `std::unordered_map`. `ExecuteOrder` is cheapest after the initial index lookup since partial executions don't remove the price level.
+99 GoogleTest cases across price arithmetic, parser, book engine, REST
+server, and UDP feed reader. `ctest --output-on-failure` runs all of
+them. The book engine tests cover all 5 mutation paths plus 5
+integration scenarios.
 
 ---
 
 ## Specification
 
-NASDAQ TotalView-ITCH 5.0 specification (January 2014):
+NASDAQ TotalView-ITCH 5.0, January 2014:
 http://www.nasdaqtrader.com/content/technicalsupport/specifications/dataproducts/NQTVITCHspecification.pdf

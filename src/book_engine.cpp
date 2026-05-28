@@ -57,6 +57,11 @@ OrderBook& OrderBookEngine::get_or_create_book(uint16_t stock_locate) {
     return books_[stock_locate];
 }
 
+static inline void refresh_top(itch::OrderBook& book) {
+    book.best_bid = book.bids.empty() ? nullptr : &book.bids.begin()->second;
+    book.best_ask = book.asks.empty() ? nullptr : &book.asks.begin()->second;
+}
+
 void OrderBookEngine::remove_shares(OrderBook& book, char side, Price price,
                                     uint32_t shares, bool full_removal) {
     auto remove = [&](auto& side_map) {
@@ -94,9 +99,13 @@ void OrderBookEngine::handle(const AddOrderMsg& m) {
     if (m.side == 'B') insert(book.bids);
     else               insert(book.asks);
 
-    order_index_[m.order_ref] = OrderRecord{
-        m.order_ref, m.stock_locate, m.side, m.shares, m.price, ""
-    };
+    refresh_top(book);
+    OrderRecord rec;
+    rec.shares       = m.shares;
+    rec.price        = m.price;
+    rec.stock_locate = m.stock_locate;
+    rec.side         = m.side;
+    order_index_[m.order_ref] = rec;
 
     stamp_book(m.stock_locate, m.timestamp);
 }
@@ -114,9 +123,14 @@ void OrderBookEngine::handle(const AddOrderMPIDMsg& m) {
     if (m.side == 'B') insert(book.bids);
     else               insert(book.asks);
 
-    order_index_[m.order_ref] = OrderRecord{
-        m.order_ref, m.stock_locate, m.side, m.shares, m.price, m.attribution
-    };
+    refresh_top(book);
+    OrderRecord rec;
+    rec.shares       = m.shares;
+    rec.price        = m.price;
+    rec.stock_locate = m.stock_locate;
+    rec.side         = m.side;
+    rec.set_mpid_from(m.attribution);
+    order_index_[m.order_ref] = rec;
 
     stamp_book(m.stock_locate, m.timestamp);
 }
@@ -135,6 +149,7 @@ void OrderBookEngine::handle(const OrderExecutedMsg& m) {
     bool full_removal = (rec.shares == 0);
 
     remove_shares(book, rec.side, rec.price, m.executed_shares, full_removal);
+    refresh_top(book);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -158,6 +173,7 @@ void OrderBookEngine::handle(const OrderExecutedPriceMsg& m) {
     bool full_removal = (rec.shares == 0);
 
     remove_shares(book, rec.side, rec.price, m.executed_shares, full_removal);
+    refresh_top(book);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -179,6 +195,7 @@ void OrderBookEngine::handle(const OrderCancelMsg& m) {
     bool full_removal = (rec.shares == 0);
 
     remove_shares(book, rec.side, rec.price, m.cancelled_shares, full_removal);
+    refresh_top(book);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -198,6 +215,7 @@ void OrderBookEngine::handle(const OrderDeleteMsg& m) {
 
     // Full removal — always decrements order_count and erases level if empty
     remove_shares(book, rec.side, rec.price, rec.shares, true);
+    refresh_top(book);
     stamp_book(rec.stock_locate, m.timestamp);
     order_index_.erase(it);
 }
@@ -230,10 +248,14 @@ void OrderBookEngine::handle(const OrderReplaceMsg& m) {
     if (old_rec.side == 'B') insert(book.bids);
     else                     insert(book.asks);
 
-    order_index_[m.new_order_ref] = OrderRecord{
-        m.new_order_ref, old_rec.stock_locate,
-        old_rec.side, m.shares, m.price, old_rec.mpid
-    };
+    refresh_top(book);
+    OrderRecord rec;
+    rec.shares       = m.shares;
+    rec.price        = m.price;
+    rec.stock_locate = old_rec.stock_locate;
+    rec.side         = old_rec.side;
+    rec.mpid         = old_rec.mpid;
+    order_index_[m.new_order_ref] = rec;
 
     stamp_book(old_rec.stock_locate, m.timestamp);
 }
@@ -303,6 +325,9 @@ std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot() const {
         book_snap.stock_locate  = info.stock_locate;
         book_snap.round_lot_size= info.round_lot_size;
         book_snap.market_category = info.market_category;
+
+        book_snap.bids.reserve(book.bids.size());
+        book_snap.asks.reserve(book.asks.size());
 
         for (const auto& [price, level] : book.bids) {
             book_snap.bids.push_back({

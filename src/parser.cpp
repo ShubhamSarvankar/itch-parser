@@ -5,6 +5,15 @@
 
 namespace itch {
 
+// always_inline on per-type parsers. The compiler already inlines these at
+// -O2, but the attribute pins the behavior across refactors and across
+// compilers, and it documents the intent.
+#if defined(__GNUC__)
+#define ITCH_INLINE [[gnu::always_inline]] inline
+#else
+#define ITCH_INLINE inline
+#endif
+
 // Wire read helpers — all assume big-endian source bytes
 
 static uint16_t read_be16(const uint8_t* p) {
@@ -69,7 +78,7 @@ static void require(const MessageBuffer& buf, std::size_t needed,
 // Byte offsets are from the start of the payload (after the length prefix).
 // Offset 0 is the message type byte.
 
-static StockDirectoryMsg parse_stock_directory(const MessageBuffer& buf) {
+ITCH_INLINE static StockDirectoryMsg parse_stock_directory(const MessageBuffer& buf) {
     require(buf, 39, "StockDirectory");
     const uint8_t* p = buf.data();
     StockDirectoryMsg m;
@@ -93,7 +102,7 @@ static StockDirectoryMsg parse_stock_directory(const MessageBuffer& buf) {
     return m;
 }
 
-static StockTradingActionMsg parse_trading_action(const MessageBuffer& buf) {
+ITCH_INLINE static StockTradingActionMsg parse_trading_action(const MessageBuffer& buf) {
     require(buf, 25, "StockTradingAction");
     const uint8_t* p = buf.data();
     StockTradingActionMsg m;
@@ -107,7 +116,7 @@ static StockTradingActionMsg parse_trading_action(const MessageBuffer& buf) {
     return m;
 }
 
-static AddOrderMsg parse_add_order(const MessageBuffer& buf) {
+ITCH_INLINE static AddOrderMsg parse_add_order(const MessageBuffer& buf) {
     require(buf, 36, "AddOrder");
     const uint8_t* p = buf.data();
     AddOrderMsg m;
@@ -122,7 +131,7 @@ static AddOrderMsg parse_add_order(const MessageBuffer& buf) {
     return m;
 }
 
-static AddOrderMPIDMsg parse_add_order_mpid(const MessageBuffer& buf) {
+ITCH_INLINE static AddOrderMPIDMsg parse_add_order_mpid(const MessageBuffer& buf) {
     require(buf, 40, "AddOrderMPID");
     const uint8_t* p = buf.data();
     AddOrderMPIDMsg m;
@@ -138,7 +147,7 @@ static AddOrderMPIDMsg parse_add_order_mpid(const MessageBuffer& buf) {
     return m;
 }
 
-static OrderExecutedMsg parse_order_executed(const MessageBuffer& buf) {
+ITCH_INLINE static OrderExecutedMsg parse_order_executed(const MessageBuffer& buf) {
     require(buf, 31, "OrderExecuted");
     const uint8_t* p = buf.data();
     OrderExecutedMsg m;
@@ -151,7 +160,7 @@ static OrderExecutedMsg parse_order_executed(const MessageBuffer& buf) {
     return m;
 }
 
-static OrderExecutedPriceMsg parse_order_executed_price(const MessageBuffer& buf) {
+ITCH_INLINE static OrderExecutedPriceMsg parse_order_executed_price(const MessageBuffer& buf) {
     require(buf, 36, "OrderExecutedPrice");
     const uint8_t* p = buf.data();
     OrderExecutedPriceMsg m;
@@ -166,7 +175,7 @@ static OrderExecutedPriceMsg parse_order_executed_price(const MessageBuffer& buf
     return m;
 }
 
-static OrderCancelMsg parse_order_cancel(const MessageBuffer& buf) {
+ITCH_INLINE static OrderCancelMsg parse_order_cancel(const MessageBuffer& buf) {
     require(buf, 23, "OrderCancel");
     const uint8_t* p = buf.data();
     OrderCancelMsg m;
@@ -178,7 +187,7 @@ static OrderCancelMsg parse_order_cancel(const MessageBuffer& buf) {
     return m;
 }
 
-static OrderDeleteMsg parse_order_delete(const MessageBuffer& buf) {
+ITCH_INLINE static OrderDeleteMsg parse_order_delete(const MessageBuffer& buf) {
     require(buf, 19, "OrderDelete");
     const uint8_t* p = buf.data();
     OrderDeleteMsg m;
@@ -189,7 +198,7 @@ static OrderDeleteMsg parse_order_delete(const MessageBuffer& buf) {
     return m;
 }
 
-static OrderReplaceMsg parse_order_replace(const MessageBuffer& buf) {
+ITCH_INLINE static OrderReplaceMsg parse_order_replace(const MessageBuffer& buf) {
     require(buf, 35, "OrderReplace");
     const uint8_t* p = buf.data();
     OrderReplaceMsg m;
@@ -210,6 +219,31 @@ std::optional<ParsedMessage> MessageParser::parse(const MessageBuffer& buf) {
         throw std::runtime_error("Parser: empty message buffer");
     }
 
+#if defined(ITCH_PARSER_COMPUTED_GOTO) && defined(__GNUC__)
+    // Computed-goto dispatch indexed by the message-type byte. Avoids the
+    // switch range check and can be friendlier to the BTB than the
+    // compiler-emitted jump table on some uarchs. Benchmark against the
+    // plain switch before keeping.
+    static void* const dispatch[256] = {
+        [0 ... 255] = &&L_unknown,
+        ['R'] = &&L_R, ['H'] = &&L_H,
+        ['A'] = &&L_A, ['F'] = &&L_F,
+        ['E'] = &&L_E, ['C'] = &&L_C,
+        ['X'] = &&L_X, ['D'] = &&L_D,
+        ['U'] = &&L_U
+    };
+    goto *dispatch[buf[0]];
+L_R: return parse_stock_directory(buf);
+L_H: return parse_trading_action(buf);
+L_A: return parse_add_order(buf);
+L_F: return parse_add_order_mpid(buf);
+L_E: return parse_order_executed(buf);
+L_C: return parse_order_executed_price(buf);
+L_X: return parse_order_cancel(buf);
+L_D: return parse_order_delete(buf);
+L_U: return parse_order_replace(buf);
+L_unknown: return std::nullopt;
+#else
     switch (static_cast<char>(buf[0])) {
         case 'R': return parse_stock_directory(buf);
         case 'H': return parse_trading_action(buf);
@@ -222,6 +256,7 @@ std::optional<ParsedMessage> MessageParser::parse(const MessageBuffer& buf) {
         case 'U': return parse_order_replace(buf);
         default:  return std::nullopt;  // out-of-scope type, discard silently
     }
+#endif
 }
 
 } // namespace itch
