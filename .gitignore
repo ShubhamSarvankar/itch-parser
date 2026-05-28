@@ -6,3 +6,8 @@ data/*
 *.o
 *.a
 PROJECT_STRUCTURE.md
+
+# Track the committed baseline measurements; new bench runs go to a
+# subdirectory and are ignored.
+!bench/out/
+bench/out/scratch/

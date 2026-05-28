@@ -1,0 +1,2 @@
+stage,count,min_ns,p50_ns,p90_ns,p99_ns,p999_ns,p9999_ns,max_ns,mean_ns,stddev_ns
+apply,263259809,22,231,594,1020,1529,10967,58589183,351.2,48286.8

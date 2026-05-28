@@ -1,0 +1,4 @@
+[bench_replay] file=data/12302019.NASDAQ_ITCH50 snapshot_interval=1000000 profile=1
+[bench_replay] messages=263259809 parse_errors=0 skipped_unknown_ref=0
+[bench_replay] wall_seconds=227.544 msg_per_sec=1156960 peak_rss_kb=185908
+[bench_replay] type_counts: R=8906 H=8966 A=117145568 F=1485888 E=5722824 C=99917 X=2787676 D=114360997 U=21639067

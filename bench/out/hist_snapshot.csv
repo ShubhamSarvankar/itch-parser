@@ -1,0 +1,2 @@
+stage,count,min_ns,p50_ns,p90_ns,p99_ns,p999_ns,p9999_ns,max_ns,mean_ns,stddev_ns
+snapshot,0,9223372036854775807,0,0,0,0,0,0,-nan,-nan
