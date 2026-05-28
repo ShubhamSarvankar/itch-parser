@@ -11,6 +11,7 @@
 
 #ifdef ITCH_HAVE_HDR
 
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <hdr/hdr_histogram.h>
@@ -64,7 +65,7 @@ private:
                         "%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
                         ",%.1f,%.1f\n",
             label,
-            hdr_total_count(h),
+            h->total_count,
             hdr_min(h),
             hdr_value_at_percentile(h, 50.0),
             hdr_value_at_percentile(h, 90.0),
