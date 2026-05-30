@@ -1,0 +1,93 @@
+{
+  "context": {
+    "date": "2026-05-30T12:23:29-04:00",
+    "host_name": "Gelato",
+    "executable": "./build/bench/itch_bench",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2419,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 49152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 2097152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 31457280,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [0.112793,0.0639648,0.0200195],
+    "library_version": "v1.9.1",
+    "library_build_type": "release",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "BM_BuildSnapshot/100/20",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "BM_BuildSnapshot/100/20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 33579,
+      "real_time": 2.1330068227159408e+01,
+      "cpu_time": 2.0857508055630007e+01,
+      "time_unit": "us",
+      "instruments": 1.0000000000000000e+02,
+      "items_per_second": 4.7944365996784203e+04,
+      "levels_per_side": 2.0000000000000000e+01
+    },
+    {
+      "name": "BM_BuildSnapshot/1000/50",
+      "family_index": 0,
+      "per_family_instance_index": 1,
+      "run_name": "BM_BuildSnapshot/1000/50",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 1011,
+      "real_time": 5.7457013254203923e+02,
+      "cpu_time": 5.6183932047477754e+02,
+      "time_unit": "us",
+      "instruments": 1.0000000000000000e+03,
+      "items_per_second": 1.7798683067517570e+03,
+      "levels_per_side": 5.0000000000000000e+01
+    },
+    {
+      "name": "BM_BuildSnapshot/5000/100",
+      "family_index": 0,
+      "per_family_instance_index": 2,
+      "run_name": "BM_BuildSnapshot/5000/100",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 53,
+      "real_time": 1.1586023037743184e+04,
+      "cpu_time": 1.1329179792452833e+04,
+      "time_unit": "us",
+      "instruments": 5.0000000000000000e+03,
+      "items_per_second": 8.8267643229227488e+01,
+      "levels_per_side": 1.0000000000000000e+02
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "context": {
+    "date": "2026-05-30T12:13:23-04:00",
+    "host_name": "Gelato",
+    "executable": "./build/bench/itch_bench",
+    "num_cpus": 4,
+    "mhz_per_cpu": 2419,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 49152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 2097152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 31457280,
+        "num_sharing": 4
+      }
+    ],
+    "load_avg": [0.322754,0.171875,0.0576172],
+    "library_version": "v1.9.1",
+    "library_build_type": "release",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "BM_ApplyMixed_Synth/10000",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "BM_ApplyMixed_Synth/10000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 19486106,
+      "real_time": 3.7626104107202607e+01,
+      "cpu_time": 3.6815335501100122e+01,
+      "time_unit": "ns",
+      "items_per_second": 2.7162593696045980e+07
+    },
+    {
+      "name": "BM_ApplyMixed_Synth/100000",
+      "family_index": 0,
+      "per_family_instance_index": 1,
+      "run_name": "BM_ApplyMixed_Synth/100000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 9935155,
+      "real_time": 7.1244403534729869e+01,
+      "cpu_time": 6.9731611031735284e+01,
+      "time_unit": "ns",
+      "items_per_second": 1.4340698360531120e+07
+    }
+  ]
+}

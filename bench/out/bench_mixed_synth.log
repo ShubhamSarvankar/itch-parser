@@ -1,0 +1,5 @@
+-------------------------------------------------------------------------------------
+Benchmark                           Time             CPU   Iterations UserCounters...
+-------------------------------------------------------------------------------------
+BM_ApplyMixed_Synth/10000        37.6 ns         36.8 ns     19486106 items_per_second=27.1626M/s
+BM_ApplyMixed_Synth/100000       71.2 ns         69.7 ns      9935155 items_per_second=14.3407M/s

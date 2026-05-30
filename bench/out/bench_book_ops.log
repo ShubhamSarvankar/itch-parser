@@ -1,0 +1,6 @@
+--------------------------------------------------------------------------------
+Benchmark                      Time             CPU   Iterations UserCounters...
+--------------------------------------------------------------------------------
+BM_DeleteOrder/10000        16.0 ns         15.7 ns     44469187 items_per_second=63.7229M/s
+BM_ReplaceOrder/10000       5.07 ns         4.97 ns    141046639 items_per_second=201.301M/s
+BM_ExecuteOrder/10000       3.45 ns         3.37 ns    207105695 items_per_second=296.334M/s

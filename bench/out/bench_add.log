@@ -1,0 +1,5 @@
+--------------------------------------------------------------------------------
+Benchmark                      Time             CPU   Iterations UserCounters...
+--------------------------------------------------------------------------------
+BM_AddOrder_HotBand          119 ns          116 ns     10210527 items_per_second=8.59453M/s
+BM_AddOrder_ColdPrice        253 ns          248 ns      3992321 items_per_second=4.03666M/s

@@ -1,0 +1,27 @@
+-------------------------------------------------------------------------------------------
+Benchmark                                 Time             CPU   Iterations UserCounters...
+-------------------------------------------------------------------------------------------
+BM_Ladder_Map_Bid/10000_mean           17.6 ns         17.2 ns           10 items_per_second=58.2044M/s levels=206
+BM_Ladder_Map_Bid/10000_median         17.6 ns         17.2 ns           10 items_per_second=58.2783M/s levels=206
+BM_Ladder_Map_Bid/10000_stddev        0.253 ns        0.247 ns           10 items_per_second=826.68k/s levels=1.61784u
+BM_Ladder_Map_Bid/10000_cv             1.44 %          1.44 %            10 items_per_second=1.42% levels=0.00%
+BM_Ladder_Flat_Bid/10000_mean          13.6 ns         13.3 ns           10 items_per_second=74.9745M/s levels=3
+BM_Ladder_Flat_Bid/10000_median        13.7 ns         13.3 ns           10 items_per_second=74.9113M/s levels=3
+BM_Ladder_Flat_Bid/10000_stddev       0.257 ns        0.252 ns           10 items_per_second=1.42159M/s levels=23.5608n
+BM_Ladder_Flat_Bid/10000_cv            1.88 %          1.89 %            10 items_per_second=1.90% levels=0.00%
+BM_Ladder_Array_Bid/10000_mean         11.9 ns         11.7 ns           10 items_per_second=85.7434M/s levels=2
+BM_Ladder_Array_Bid/10000_median       11.9 ns         11.7 ns           10 items_per_second=85.8322M/s levels=2
+BM_Ladder_Array_Bid/10000_stddev      0.084 ns        0.069 ns           10 items_per_second=505.806k/s levels=15.7072n
+BM_Ladder_Array_Bid/10000_cv           0.70 %          0.59 %            10 items_per_second=0.59% levels=0.00%
+BM_Ladder_Map_Top/10000_mean          0.210 ns        0.206 ns           10 items_per_second=4.85155G/s
+BM_Ladder_Map_Top/10000_median        0.210 ns        0.206 ns           10 items_per_second=4.8543G/s
+BM_Ladder_Map_Top/10000_stddev        0.002 ns        0.002 ns           10 items_per_second=41.2355M/s
+BM_Ladder_Map_Top/10000_cv             0.90 %          0.85 %            10 items_per_second=0.85%
+BM_Ladder_Flat_Top/10000_mean         0.295 ns        0.288 ns           10 items_per_second=3.47673G/s
+BM_Ladder_Flat_Top/10000_median       0.300 ns        0.293 ns           10 items_per_second=3.40771G/s
+BM_Ladder_Flat_Top/10000_stddev       0.016 ns        0.015 ns           10 items_per_second=183.195M/s
+BM_Ladder_Flat_Top/10000_cv            5.28 %          5.26 %            10 items_per_second=5.27%
+BM_Ladder_Array_Top/10000_mean        0.280 ns        0.273 ns           10 items_per_second=3.66494G/s
+BM_Ladder_Array_Top/10000_median      0.280 ns        0.272 ns           10 items_per_second=3.67207G/s
+BM_Ladder_Array_Top/10000_stddev      0.002 ns        0.002 ns           10 items_per_second=28.9127M/s
+BM_Ladder_Array_Top/10000_cv           0.79 %          0.79 %            10 items_per_second=0.79%

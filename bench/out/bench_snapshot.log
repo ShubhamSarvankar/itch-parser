@@ -1,0 +1,6 @@
+------------------------------------------------------------------------------------
+Benchmark                          Time             CPU   Iterations UserCounters...
+------------------------------------------------------------------------------------
+BM_BuildSnapshot/100/20         21.3 us         20.9 us        33579 instruments=100 items_per_second=47.9444k/s levels_per_side=20
+BM_BuildSnapshot/1000/50         575 us          562 us         1011 instruments=1k items_per_second=1.77987k/s levels_per_side=50
+BM_BuildSnapshot/5000/100      11586 us        11329 us           53 instruments=5k items_per_second=88.2676/s levels_per_side=100

@@ -1,0 +1,7 @@
+-------------------------------------------------------------------------------
+Benchmark                     Time             CPU   Iterations UserCounters...
+-------------------------------------------------------------------------------
+BM_ParseAddOrder           18.2 ns         17.8 ns     38334535 items_per_second=56.1339M/s
+BM_ParseOrderDelete        4.38 ns         4.29 ns    166060827 items_per_second=233.269M/s
+BM_ParseOrderReplace       4.68 ns         4.58 ns    152001729 items_per_second=218.345M/s
+BM_ParseUnknownType        1.37 ns         1.34 ns    521941041 items_per_second=746.351M/s
