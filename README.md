@@ -2,37 +2,37 @@
 
 A NASDAQ TotalView-ITCH 5.0 binary feed parser and in-memory order book
 maintained in C++20. Built against a real production capture
-(`12302019.NASDAQ_ITCH50`, 7.7 GB, 412M messages), with a focus on
+(`12302019.NASDAQ_ITCH50`, 7.7 GB, 263M messages), with a focus on
 honest latency measurement rather than headline microbenchmark numbers.
 
 ---
 
 ## 1. Headline
 
-End to end replay of the December 2019 NASDAQ capture, no tuning, no
-trimming, single threaded, snapshot publish every 1000 messages
-included in the cost:
+End-to-end replay of the December 2019 NASDAQ capture, no tuning, no
+trimming, single threaded, snapshot publish disabled for baseline
+(snap=1,000,000 — see §3 for why):
 
-| metric                              | value     |
-|-------------------------------------|-----------|
-| messages                            | __ M      |
-| wall clock                          | __ s      |
-| sustained throughput                | __ M msg/s|
-| p50 apply latency                   | __ ns     |
-| p99 apply latency                   | __ ns     |
-| p99.9 apply latency                 | __ us     |
-| peak RSS                            | __ MB     |
-| IPC                                 | __        |
-| L1 dcache miss rate                 | __ %      |
-| LLC miss rate                       | __ %      |
+| metric                              | value                            |
+|-------------------------------------|----------------------------------|
+| messages                            | 263 M                            |
+| wall clock                          | 227.5 s                          |
+| sustained throughput                | 1.16 M msg/s                     |
+| p50 apply latency                   | 231 ns                           |
+| p99 apply latency                   | 1,020 ns                         |
+| p99.9 apply latency                 | 1.53 us                          |
+| peak RSS                            | 181.6 MB                         |
+| IPC                                 | N/A (perf unavailable on WSL2)   |
+| L1 dcache miss rate                 | N/A (perf unavailable on WSL2)   |
+| LLC miss rate                       | N/A (perf unavailable on WSL2)   |
 
 Reproduce with:
 
 ```
-make perf-baseline ITCH_FILE=data/12302019.NASDAQ_ITCH50
+make bench-replay ITCH_FILE=data/12302019.NASDAQ_ITCH50
 ```
 
-Raw `perf stat` output is committed under `bench/out/baseline.perf`.
+HDR histogram CSVs are committed under `bench/out/`.
 
 The interesting story is not the means. It is what changed from the
 baseline, and what didn't.
@@ -46,11 +46,19 @@ the system. Every Add, Delete, Cancel, Execute, and Replace touches it.
 Three reasonable choices, all implemented (`include/itch/price_ladder.h`)
 and benched (`bench_ladder_shootout.cpp`):
 
-| ladder       | add p50 | add p99 | erase p50 | top()   | bytes/instr  | L1 miss |
-|--------------|---------|---------|-----------|---------|--------------|---------|
-| `MapLadder`  | __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
-| `FlatLadder` | __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
-| `ArrayLadder`| __ ns   | __ ns   | __ ns     | __ ns   | __           | __ %    |
+| ladder        | mixed-op med¹ | top()    | bytes/instr²              | L1 miss                  |
+|---------------|---------------|----------|---------------------------|--------------------------|
+| `MapLadder`   | 17.6 ns       | 0.21 ns  | ~48 B × N_levels per side | N/A (perf unavailable)   |
+| `FlatLadder`  | 13.7 ns       | 0.30 ns  | ~16 B × N_levels per side | N/A (perf unavailable)   |
+| `ArrayLadder` | 11.9 ns       | 0.28 ns  | 32 KB fixed (1024 slots)  | N/A (perf unavailable)   |
+
+¹ Mixed-workload median across 10 repetitions (75/20/5 delete/add/execute,
+  10k-seeded book in L2 cache). CV ≤ 1.9% — p99 ≈ median for this workload.
+  Isolated add/erase percentiles not captured separately.
+
+² Per instrument per side. MapLadder and FlatLadder scale with active level
+  count; at 20 levels: Map ≈ 960 B, Flat ≈ 344 B. ArrayLadder is fixed at
+  16 KB/side regardless of fill (SLOTS=1024, sizeof(PriceLevel)=16).
 
 `MapLadder` is a `std::map<Price, PriceLevel>`. Red-black tree, pointer
 chasing on every operation, but handles any price range. Baseline.
@@ -79,29 +87,30 @@ benefit when the working set already fits in L2.
 
 ## 3. Tail latency under realistic load
 
-The snapshot publish that runs every 1000 messages used to run
-synchronously on the pipeline thread. Histogram before:
+Histogram, current implementation (snapshot publish on pipeline thread,
+snap=1,000,000 for baseline):
 
 ```
-parse:     p50 __ ns,  p99 __ ns,  p99.9 __ ns
-apply:     p50 __ ns,  p99 __ ns,  p99.9 __ us    <-- snapshot spike
-snapshot:  p50 __ us,  p99 __ us,  p99.9 __ us
+parse:  p50  38 ns,  p99   88 ns,  p99.9   149 ns,  max    1.3 ms
+apply:  p50 231 ns,  p99 1020 ns,  p99.9  1529 ns,  p99.99 10.97 us,  max 58.6 ms
 ```
 
-Moving snapshot construction to a dedicated thread with per-book
-seqlocks and a SPSC dirty queue (`docs/PHASE5_OFF_THREAD_SNAPSHOT.md`)
-collapses the apply tail without affecting the parse path:
+The p99.99 spike is the periodic snapshot publish. The 58.6 ms max is a
+separate issue: `order_index_` hash-table rehash as the map crosses a
+capacity boundary mid-session. Fix: `reserve()` in the engine constructor
+(currently unimplemented — see §4).
 
-```
-apply (after): p50 __ ns,  p99 __ ns,  p99.9 __ ns
-```
+At the production snapshot interval (snap=1,000), snapshot publish dominates
+wall clock by roughly 30×; this is the empirical motivation for the
+off-thread design.
 
-Cost: the seqlock adds two relaxed atomic stores around every book
-mutation, measured at __ ns per apply. Trade made: a deterministic small
-fixed cost on every message in exchange for removing the periodic
-hundreds-of-microseconds spike.
+The Phase 5 off-thread snapshot design (`docs/PHASE5_OFF_THREAD_SNAPSHOT.md`)
+targets the p99.99 spike by moving snapshot construction off the pipeline
+thread via a seqlock + SPSC dirty queue. Phase 5 is **design only** — the
+implementation was deferred pending concurrent property tests that cannot be
+reliably validated in this environment (see §4).
 
-The histogram CSVs that produce this section live in `bench/out/`.
+The histogram CSVs are committed under `bench/out/`.
 
 ---
 
@@ -144,6 +153,30 @@ What it is not:
   rehash. Either the symbol storage stabilizes (move it out of the
   hash table) or the keys stay `std::string`. Current code keeps them
   as `std::string`.
+- **`order_index_` hash-table rehash causes the 58.6 ms apply max.**
+  The dense map for in-flight orders grows past its default capacity
+  mid-session and rehashes in place, blocking the pipeline thread for
+  tens of milliseconds. One-line fix: `order_index_.reserve(150'000'000)`
+  in the engine constructor. Not applied here because the trade-off is
+  substantial: peak RSS rises from 181 MB to approximately 3 GB
+  (150M slots × 16 bytes). The spike is documented; the fix is a
+  deployment-time decision.
+- **Synthetic benchmark mix does not match real ITCH.** The mixed-workload
+  bench uses a 75/20/5 delete/add/execute distribution. The real capture
+  (`12302019.NASDAQ_ITCH50`) is closer to 43/45/12. The synthetic bench
+  is used for ladder comparison only, where relative ordering matters
+  more than absolute fidelity. `BM_ApplyMixed_Capture` is the honest
+  end-to-end number.
+- **`perf` counters unavailable on WSL2.** The IPC, L1 dcache miss rate,
+  LLC miss rate, and branch miss rate columns in §1 and §2 are `N/A`.
+  The WSL2 kernel (6.6.87.2-microsoft-standard-WSL2) does not expose the
+  perf_event subsystem. HdrHistogram_c percentiles are the load-bearing
+  latency measurement.
+- **Phase 5 off-thread snapshot is design only.** The seqlock + SPSC
+  dirty-queue implementation requires concurrent property tests
+  ("snapshot copies never see a level with shares < 0") that cannot be
+  reliably written in this environment. The design is in
+  `docs/PHASE5_OFF_THREAD_SNAPSHOT.md`; no code was produced.
 
 A senior reviewer should walk away knowing what is robust and what is
 not. The above list is deliberately exhaustive.
@@ -182,10 +215,10 @@ moodycamel ConcurrentQueue, HdrHistogram_c, ankerl/unordered_dense.
 ```bash
 make build                           # release build
 make replay                          # end to end
-make perf-baseline                   # with perf stat
 make bench                           # gbench json
-make bench-replay                    # histogrammed replay
-make perf-bench                      # gbench under perf
+make bench-replay                    # histogrammed replay (HdrHistogram)
+make perf-baseline                   # with perf stat (native Linux only; unavailable on WSL2)
+make perf-bench                      # gbench under perf (native Linux only)
 ```
 
 Run modes:
