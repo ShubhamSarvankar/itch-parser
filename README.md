@@ -21,6 +21,8 @@ trimming, single threaded, snapshot publish disabled for baseline
 | p50 apply latency                   | 231 ns                           |
 | p99 apply latency                   | 1,020 ns                         |
 | p99.9 apply latency                 | 1.53 us                          |
+| p99.99 apply latency                | 10.97 us                         |
+| max apply latency                   | 58.6 ms                          |
 | peak RSS                            | 181.6 MB                         |
 | IPC                                 | N/A (perf unavailable on WSL2)   |
 | L1 dcache miss rate                 | N/A (perf unavailable on WSL2)   |
@@ -101,8 +103,9 @@ capacity boundary mid-session. Fix: `reserve()` in the engine constructor
 (currently unimplemented — see §4).
 
 At the production snapshot interval (snap=1,000), snapshot publish dominates
-wall clock by roughly 30×; this is the empirical motivation for the
-off-thread design.
+wall clock by roughly 30× (extrapolated from a partial run; see
+`bench/BASELINE.md`); this is the empirical motivation for the off-thread
+design.
 
 The Phase 5 off-thread snapshot design (`docs/PHASE5_OFF_THREAD_SNAPSHOT.md`)
 targets the p99.99 spike by moving snapshot construction off the pipeline
