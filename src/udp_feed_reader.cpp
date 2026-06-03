@@ -1,4 +1,5 @@
 #include "udp_feed_reader.h"
+#include "itch/byte_order.h"
 #include <stdexcept>
 #include <cstring>
 #include <iostream>
@@ -45,20 +46,6 @@ static void join_multicast(int sock, const std::string& group,
     if (::setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                      &mreq, sizeof(mreq)) < 0)
         throw std::runtime_error("UDPFeedReader: IP_ADD_MEMBERSHIP failed");
-}
-
-// ---- big-endian read helpers ----
-
-static uint16_t read_be16(const uint8_t* p) {
-    return static_cast<uint16_t>(
-        (static_cast<uint16_t>(p[0]) << 8) | p[1]);
-}
-
-static uint64_t read_be64(const uint8_t* p) {
-    uint64_t v = 0;
-    for (int i = 0; i < 8; ++i)
-        v = (v << 8) | p[i];
-    return v;
 }
 
 // ---- constructors ----
@@ -141,7 +128,11 @@ bool UDPFeedReader::refill() {
                   << expected_seq_ << " got " << seq
                   << " (" << gap << " message(s) lost)\n";
     } else if (seq < expected_seq_) {
-        // Duplicate or out-of-order packet — discard without updating state
+        // Duplicate or retransmitted packet — discard.
+        // TODO: proper MoldUDP64 gap-fill requires buffering messages past the
+        // gap and replaying retransmits in order; that is not implemented here.
+        // For now we count these so the deficit is observable in stats.
+        ++dropped_behind_;
         return true;
     }
 

@@ -58,29 +58,36 @@ int main() {
                     queue.enqueue(std::move(*buf));
                 }
                 std::cerr << "[INFO] gaps detected: "
-                          << reader.gaps_detected() << "\n";
+                          << reader.gaps_detected()
+                          << "  dropped-behind (retransmits discarded): "
+                          << reader.dropped_behind() << "\n";
             } catch (const std::exception& e) {
                 std::cerr << "[ERROR] receive thread: " << e.what() << "\n";
             }
             recv_done = true;
         });
 
-        // Engine thread: dequeue → parse → apply (runs on main thread)
+        // Engine thread: dequeue → parse → apply (runs on main thread).
+        // Each iteration dequeues at most once so no message consumed by the
+        // loop condition can be silently discarded during shutdown drain.
         itch::MessageParser  parser;
         itch::MessageBuffer  buf;
         std::cout << "[INFO] engine thread running — waiting for packets\n";
-        while (!recv_done || queue.try_dequeue(buf)) {
-            if (queue.try_dequeue(buf)) {
-                try {
-                    auto msg = parser.parse(buf);
-                    if (msg) engine.apply(*msg);
-                } catch (const std::exception& e) {
-                    std::cerr << "[WARN] parse error: " << e.what() << "\n";
-                }
-            } else {
-                std::this_thread::yield();
+
+        auto process = [&](itch::MessageBuffer& b) {
+            try {
+                auto msg = parser.parse(b);
+                if (msg) engine.apply(*msg);
+            } catch (const std::exception& e) {
+                std::cerr << "[WARN] parse error: " << e.what() << "\n";
             }
+        };
+
+        while (!recv_done.load(std::memory_order_acquire)) {
+            if (queue.try_dequeue(buf)) process(buf);
+            else                        std::this_thread::yield();
         }
+        while (queue.try_dequeue(buf)) process(buf);
 
     } else {
         // File mode — single-threaded pipeline, unchanged from Phase 1

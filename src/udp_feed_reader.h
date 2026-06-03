@@ -25,6 +25,7 @@ public:
 
     bool     is_open()           const { return sock_ >= 0; }
     uint64_t gaps_detected()     const { return gaps_detected_; }
+    uint64_t dropped_behind()    const { return dropped_behind_; }
     uint64_t messages_received() const { return messages_received_; }
 
 private:
@@ -34,6 +35,7 @@ private:
     int      sock_{-1};
     uint64_t expected_seq_{1};
     uint64_t gaps_detected_{0};
+    uint64_t dropped_behind_{0};
     uint64_t messages_received_{0};
 
     // Per-packet message queue — drained by next_message() before next recvfrom()

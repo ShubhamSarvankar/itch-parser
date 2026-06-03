@@ -25,6 +25,8 @@ struct OrderBookSnapshot {
 
 struct SystemSnapshot {
     std::unordered_map<std::string, OrderBookSnapshot> books{};
+    // lowercase canonical symbol → canonical symbol; built once in build_snapshot
+    std::unordered_map<std::string, std::string> symbol_index{};
     uint64_t messages_processed{};
     uint64_t snapshot_timestamp{};  // wall clock ms since epoch
     bool     pipeline_complete{false};

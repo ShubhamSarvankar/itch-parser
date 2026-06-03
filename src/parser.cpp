@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "itch/byte_order.h"
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
@@ -13,44 +14,6 @@ namespace itch {
 #else
 #define ITCH_INLINE inline
 #endif
-
-// Wire read helpers — all assume big-endian source bytes
-
-static uint16_t read_be16(const uint8_t* p) {
-    return static_cast<uint16_t>(
-        (static_cast<uint16_t>(p[0]) << 8) | p[1]
-    );
-}
-
-static uint32_t read_be32(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0]) << 24) |
-           (static_cast<uint32_t>(p[1]) << 16) |
-           (static_cast<uint32_t>(p[2]) <<  8) |
-            static_cast<uint32_t>(p[3]);
-}
-
-// Timestamp is 6 bytes on the wire — zero-extend to uint64_t explicitly.
-// Never memcpy 8 bytes here: that would read 2 bytes past the timestamp
-// field into the next field, corrupting both.
-static uint64_t read_be48(const uint8_t* p) {
-    return (static_cast<uint64_t>(p[0]) << 40) |
-           (static_cast<uint64_t>(p[1]) << 32) |
-           (static_cast<uint64_t>(p[2]) << 24) |
-           (static_cast<uint64_t>(p[3]) << 16) |
-           (static_cast<uint64_t>(p[4]) <<  8) |
-            static_cast<uint64_t>(p[5]);
-}
-
-static uint64_t read_be64(const uint8_t* p) {
-    return (static_cast<uint64_t>(p[0]) << 56) |
-           (static_cast<uint64_t>(p[1]) << 48) |
-           (static_cast<uint64_t>(p[2]) << 40) |
-           (static_cast<uint64_t>(p[3]) << 32) |
-           (static_cast<uint64_t>(p[4]) << 24) |
-           (static_cast<uint64_t>(p[5]) << 16) |
-           (static_cast<uint64_t>(p[6]) <<  8) |
-            static_cast<uint64_t>(p[7]);
-}
 
 // Strip trailing spaces from a fixed-width alpha field.
 static std::string read_alpha(const uint8_t* p, std::size_t len) {
