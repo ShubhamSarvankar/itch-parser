@@ -6,11 +6,13 @@
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <atomic>
 #include "feed_reader.h"
 #include "parser.h"
 #include "book_engine.h"
 #include "snapshot_publisher.h"
 #include "rest_server.h"
+#include "concurrentqueue.h"
 
 using json = nlohmann::json;
 
@@ -281,6 +283,7 @@ TEST_F(RestIntegrationTest, Top_AAPL_CorrectBestBidAskSpread) {
     // Fixed-point: 2872000 - 2871500 = 500 raw = 0.0500
     EXPECT_NEAR(j["spread"].get<double>(), 0.05, 1e-4);
     EXPECT_EQ(j["last_update_timestamp"].get<uint64_t>(), 34200000004000ULL);
+    EXPECT_FALSE(j["crossed"].get<bool>());
 }
 
 TEST_F(RestIntegrationTest, Top_CaseInsensitive) {
@@ -380,4 +383,101 @@ TEST(RestPreSnapshot, Status_Returns200BeforeFirstSnapshot) {
     EXPECT_FALSE(j["pipeline_complete"].get<bool>());
 
     server.stop();
+}
+
+// ---- Crossed-book spread ----
+
+TEST(CrossedBook, Top_ReportsCrossedAndNegativeSpread) {
+    // Build a crossed book manually: bid 287.20 > ask 287.15
+    itch::SnapshotPublisher publisher;
+    itch::OrderBookEngine   engine(publisher);
+    engine.set_snapshot_interval(1);
+
+    itch::InstrumentInfo info;
+    info.stock_locate   = 1;
+    info.symbol         = "XBOOK";
+    info.trading_state  = 'T';
+    info.round_lot_size = 100;
+    engine.register_instrument(info);
+
+    // Ask at 287.15, bid at 287.20 → crossed
+    itch::AddOrderMsg ask;
+    ask.stock_locate = 1; ask.order_ref = 1; ask.side = 'S';
+    ask.shares = 100; ask.price.raw = 2871500;
+    engine.apply(ask);
+
+    itch::AddOrderMsg bid;
+    bid.stock_locate = 1; bid.order_ref = 2; bid.side = 'B';
+    bid.shares = 100; bid.price.raw = 2872000;
+    engine.apply(bid);
+
+    engine.set_pipeline_complete();
+
+    itch::RestServer server(publisher, 18085);
+    server.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    httplib::Client client("localhost", 18085);
+    auto res = client.Get("/book/XBOOK/top");
+    ASSERT_NE(res, nullptr);
+    EXPECT_EQ(res->status, 200);
+
+    auto j = json::parse(res->body);
+    EXPECT_TRUE(j["crossed"].get<bool>());
+    // Spread is negative for a crossed book (not a huge positive wrap value)
+    EXPECT_LT(j["spread"].get<double>(), 0.0);
+
+    server.stop();
+}
+
+// ---- Shutdown-drain loop ----
+// Verifies that the corrected drain pattern processes every queued message
+// even when recv_done is already true (i.e. no message is consumed and then
+// silently discarded by the while condition).
+
+TEST(DrainLoop, SingleQueuedMessageIsNotDroppedWhenRecvDone) {
+    itch::SnapshotPublisher publisher;
+    itch::OrderBookEngine   engine(publisher);
+    engine.set_snapshot_interval(1);
+
+    itch::InstrumentInfo info;
+    info.stock_locate   = 1;
+    info.symbol         = "DRAIN";
+    info.trading_state  = 'T';
+    info.round_lot_size = 100;
+    engine.register_instrument(info);
+
+    // Build a single AddOrder message using the same verified helpers used
+    // throughout this file, so the byte layout is guaranteed to match the parser.
+    itch::MessageParser parser;
+    auto raw = make_add_order(/*locate=*/1, /*ref=*/42, 'B',
+                              /*shares=*/100, /*price_raw=*/1000000,
+                              /*ts=*/0);
+    itch::MessageBuffer buf(raw.begin(), raw.end());
+
+    moodycamel::ConcurrentQueue<itch::MessageBuffer> queue;
+    queue.enqueue(buf);
+
+    std::atomic<bool> recv_done{true};  // already done — simulates the race
+
+    // Corrected drain pattern: dequeue exactly once per iteration
+    itch::MessageBuffer item;
+    while (!recv_done.load(std::memory_order_acquire)) {
+        if (queue.try_dequeue(item)) {
+            auto msg = parser.parse(item);
+            if (msg) engine.apply(*msg);
+        } else {
+            std::this_thread::yield();
+        }
+    }
+    while (queue.try_dequeue(item)) {
+        auto msg = parser.parse(item);
+        if (msg) engine.apply(*msg);
+    }
+
+    // The single message must have been applied, not dropped
+    EXPECT_EQ(engine.messages_processed(), 1u);
+    const auto* book = engine.get_book(1);
+    ASSERT_NE(book, nullptr);
+    EXPECT_FALSE(book->bids.empty());
 }

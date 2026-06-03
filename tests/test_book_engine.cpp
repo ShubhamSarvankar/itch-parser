@@ -592,6 +592,55 @@ TEST_F(BookEngineTest, Timestamp_UpdatedByReplace) {
     EXPECT_EQ(snap->books.at("AAPL").last_update_timestamp, 34200000004000ULL);
 }
 
+// Overflow / corruption guards
+
+TEST_F(BookEngineTest, OversizedExecute_ClampsToZeroAndErasesOrder) {
+    engine.apply(add(1, 'S', 100, 1000100));
+    // Execute more shares than the order holds
+    engine.apply(execute(1, 200));
+
+    // Order must be gone, not immortal
+    EXPECT_EQ(engine.get_order(1), nullptr);
+    // Level must be gone too (order_count reaches 0)
+    const auto* book = engine.get_book(1);
+    EXPECT_TRUE(book->asks.empty());
+    // Exactly one corruption event counted
+    EXPECT_EQ(engine.corrupt_messages(), 1u);
+}
+
+TEST_F(BookEngineTest, OversizedCancel_ClampsToZeroAndErasesOrder) {
+    engine.apply(add(1, 'B', 50, 1000000));
+    engine.apply(cancel(1, 300));
+
+    EXPECT_EQ(engine.get_order(1), nullptr);
+    const auto* book = engine.get_book(1);
+    EXPECT_TRUE(book->bids.empty());
+    EXPECT_EQ(engine.corrupt_messages(), 1u);
+}
+
+TEST_F(BookEngineTest, OversizedCancel_NoPhantomLiquidity) {
+    // Two orders at the same level so total_shares=200
+    engine.apply(add(1, 'B', 100, 1000000));
+    engine.apply(add(2, 'B', 100, 1000000));
+    // Cancel order 1 with an amount larger than its recorded shares
+    engine.apply(cancel(1, 500));
+
+    const auto* book = engine.get_book(1);
+    // Order 1 should be gone (clamped to zero → full_removal)
+    EXPECT_EQ(engine.get_order(1), nullptr);
+    // Level total_shares must not have wrapped to a huge number
+    if (!book->bids.empty()) {
+        EXPECT_LT(book->bids.begin()->second.total_shares, 1'000'000u);
+    }
+    EXPECT_EQ(engine.corrupt_messages(), 1u);
+}
+
+TEST_F(BookEngineTest, NormalExecute_DoesNotIncrementCorruptCounter) {
+    engine.apply(add(1, 'S', 200, 1000100));
+    engine.apply(execute(1, 100));
+    EXPECT_EQ(engine.corrupt_messages(), 0u);
+}
+
 TEST_F(BookEngineTest, Timestamp_ZeroForInstrumentWithNoBookActivity) {
     // Register a second instrument but never apply any book-mutating messages
     itch::InstrumentInfo info;

@@ -3,6 +3,8 @@
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 
 namespace itch {
 
@@ -62,19 +64,34 @@ static inline void refresh_top(itch::OrderBook& book) {
     book.best_ask = book.asks.empty() ? nullptr : &book.asks.begin()->second;
 }
 
+// Subtracts sub from val in-place; clamps to zero if sub > val and returns
+// true to signal data corruption.
+template<typename T>
+[[nodiscard]] static bool clamped_sub(T& val, T sub) noexcept {
+    if (sub > val) { val = T{0}; return true; }
+    val -= sub;
+    return false;
+}
+
 void OrderBookEngine::remove_shares(OrderBook& book, char side, Price price,
                                     uint32_t shares, bool full_removal) {
     auto remove = [&](auto& side_map) {
         auto it = side_map.find(price);
         if (it == side_map.end()) return;
         PriceLevel& level = it->second;
-        level.total_shares -= shares;
+        // Safety net only: callers pass (before - rec.shares) so this clamp
+        // fires only if the level was already desynced by a prior corruption.
+        // corrupt_messages_ is not incremented here — it counts bad *input
+        // messages* (one per oversized execute/cancel at the handler), not
+        // individual subtractions.
+        (void)clamped_sub(level.total_shares, static_cast<uint64_t>(shares));
         if (full_removal) --level.order_count;
         if (level.order_count == 0) side_map.erase(it);
     };
 
     if (side == 'B') remove(book.bids);
     else             remove(book.asks);
+    refresh_top(book);  // always resync cached top pointers after any mutation
 }
 
 void OrderBookEngine::stamp_book(uint16_t stock_locate, uint64_t timestamp) {
@@ -86,53 +103,41 @@ void OrderBookEngine::stamp_book(uint16_t stock_locate, uint64_t timestamp) {
 
 // Message handlers
 
-void OrderBookEngine::handle(const AddOrderMsg& m) {
-    OrderBook& book = get_or_create_book(m.stock_locate);
+void OrderBookEngine::add_order_impl(uint16_t stock_locate, uint64_t order_ref,
+                                     char side, uint32_t shares, Price price,
+                                     uint64_t timestamp, std::string_view mpid) {
+    OrderBook& book = get_or_create_book(stock_locate);
 
     auto insert = [&](auto& side_map) {
-        auto& level        = side_map[m.price];
-        level.price        = m.price;
-        level.total_shares += m.shares;
+        auto& level        = side_map[price];
+        level.price        = price;
+        level.total_shares += shares;
         ++level.order_count;
     };
 
-    if (m.side == 'B') insert(book.bids);
-    else               insert(book.asks);
+    if (side == 'B') insert(book.bids);
+    else             insert(book.asks);
 
     refresh_top(book);
     OrderRecord rec;
-    rec.shares       = m.shares;
-    rec.price        = m.price;
-    rec.stock_locate = m.stock_locate;
-    rec.side         = m.side;
-    order_index_[m.order_ref] = rec;
+    rec.shares       = shares;
+    rec.price        = price;
+    rec.stock_locate = stock_locate;
+    rec.side         = side;
+    if (!mpid.empty()) rec.set_mpid_from(mpid);
+    order_index_[order_ref] = rec;
 
-    stamp_book(m.stock_locate, m.timestamp);
+    stamp_book(stock_locate, timestamp);
+}
+
+void OrderBookEngine::handle(const AddOrderMsg& m) {
+    add_order_impl(m.stock_locate, m.order_ref, m.side, m.shares, m.price,
+                   m.timestamp, {});
 }
 
 void OrderBookEngine::handle(const AddOrderMPIDMsg& m) {
-    OrderBook& book = get_or_create_book(m.stock_locate);
-
-    auto insert = [&](auto& side_map) {
-        auto& level        = side_map[m.price];
-        level.price        = m.price;
-        level.total_shares += m.shares;
-        ++level.order_count;
-    };
-
-    if (m.side == 'B') insert(book.bids);
-    else               insert(book.asks);
-
-    refresh_top(book);
-    OrderRecord rec;
-    rec.shares       = m.shares;
-    rec.price        = m.price;
-    rec.stock_locate = m.stock_locate;
-    rec.side         = m.side;
-    rec.set_mpid_from(m.attribution);
-    order_index_[m.order_ref] = rec;
-
-    stamp_book(m.stock_locate, m.timestamp);
+    add_order_impl(m.stock_locate, m.order_ref, m.side, m.shares, m.price,
+                   m.timestamp, m.attribution);
 }
 
 void OrderBookEngine::handle(const OrderExecutedMsg& m) {
@@ -145,11 +150,11 @@ void OrderBookEngine::handle(const OrderExecutedMsg& m) {
     OrderRecord& rec = it->second;
     OrderBook&   book = get_or_create_book(rec.stock_locate);
 
-    rec.shares -= m.executed_shares;
+    uint32_t before = rec.shares;
+    if (clamped_sub(rec.shares, m.executed_shares)) ++corrupt_messages_;
     bool full_removal = (rec.shares == 0);
 
-    remove_shares(book, rec.side, rec.price, m.executed_shares, full_removal);
-    refresh_top(book);
+    remove_shares(book, rec.side, rec.price, before - rec.shares, full_removal);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -169,11 +174,11 @@ void OrderBookEngine::handle(const OrderExecutedPriceMsg& m) {
     OrderRecord& rec = it->second;
     OrderBook&   book = get_or_create_book(rec.stock_locate);
 
-    rec.shares -= m.executed_shares;
+    uint32_t before = rec.shares;
+    if (clamped_sub(rec.shares, m.executed_shares)) ++corrupt_messages_;
     bool full_removal = (rec.shares == 0);
 
-    remove_shares(book, rec.side, rec.price, m.executed_shares, full_removal);
-    refresh_top(book);
+    remove_shares(book, rec.side, rec.price, before - rec.shares, full_removal);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -191,11 +196,11 @@ void OrderBookEngine::handle(const OrderCancelMsg& m) {
     OrderRecord& rec = it->second;
     OrderBook&   book = get_or_create_book(rec.stock_locate);
 
-    rec.shares -= m.cancelled_shares;
+    uint32_t before = rec.shares;
+    if (clamped_sub(rec.shares, m.cancelled_shares)) ++corrupt_messages_;
     bool full_removal = (rec.shares == 0);
 
-    remove_shares(book, rec.side, rec.price, m.cancelled_shares, full_removal);
-    refresh_top(book);
+    remove_shares(book, rec.side, rec.price, before - rec.shares, full_removal);
     stamp_book(rec.stock_locate, m.timestamp);
 
     if (full_removal) {
@@ -215,7 +220,6 @@ void OrderBookEngine::handle(const OrderDeleteMsg& m) {
 
     // Full removal — always decrements order_count and erases level if empty
     remove_shares(book, rec.side, rec.price, rec.shares, true);
-    refresh_top(book);
     stamp_book(rec.stock_locate, m.timestamp);
     order_index_.erase(it);
 }
@@ -234,7 +238,6 @@ void OrderBookEngine::handle(const OrderReplaceMsg& m) {
 
     OrderBook& book = get_or_create_book(old_rec.stock_locate);
 
-    // Remove original order from its price level
     remove_shares(book, old_rec.side, old_rec.price, old_rec.shares, true);
 
     // Add replacement order at new price/shares, same side
@@ -279,10 +282,12 @@ void OrderBookEngine::handle(const StockTradingActionMsg& m) {
 }
 
 void OrderBookEngine::log_summary() const {
-    if (skipped_unknown_ref_ > 0) {
+    if (skipped_unknown_ref_ > 0)
         std::cerr << "[WARN] " << skipped_unknown_ref_
                   << " message(s) skipped: unknown order reference\n";
-    }
+    if (corrupt_messages_ > 0)
+        std::cerr << "[WARN] " << corrupt_messages_
+                  << " oversized execute/cancel message(s): rec.shares clamped to zero\n";
 }
 
 std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot_for_test() const {
@@ -362,6 +367,15 @@ std::shared_ptr<SystemSnapshot> OrderBookEngine::build_snapshot() const {
             empty_snap.market_category = info.market_category;
             snap->books[info.symbol] = std::move(empty_snap);
         }
+    }
+
+    // Build lowercase → canonical index once so REST handlers do O(1) lookup
+    snap->symbol_index.reserve(snap->books.size());
+    for (const auto& [sym, _] : snap->books) {
+        std::string lo = sym;
+        std::transform(lo.begin(), lo.end(), lo.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        snap->symbol_index[lo] = sym;
     }
 
     return snap;

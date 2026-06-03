@@ -165,17 +165,10 @@ void RestServer::setup_routes() {
             }
         }
 
-        // Case-insensitive symbol lookup
+        // Case-insensitive O(1) symbol lookup via pre-built index
         std::string requested = to_lower(req.path_params.at("symbol"));
-        const OrderBookSnapshot* book_snap = nullptr;
-        for (const auto& [sym, book] : snap->books) {
-            if (to_lower(sym) == requested) {
-                book_snap = &book;
-                break;
-            }
-        }
-
-        if (!book_snap) {
+        auto idx_it = snap->symbol_index.find(requested);
+        if (idx_it == snap->symbol_index.end()) {
             res.status = 404;
             res.set_content(
                 json{{"error", "instrument not found: " +
@@ -183,6 +176,7 @@ void RestServer::setup_routes() {
                 "application/json");
             return;
         }
+        const OrderBookSnapshot* book_snap = &snap->books.at(idx_it->second);
 
         json bids = json::array();
         int bid_count = 0;
@@ -233,16 +227,10 @@ void RestServer::setup_routes() {
             return;
         }
 
+        // Case-insensitive O(1) symbol lookup via pre-built index
         std::string requested = to_lower(req.path_params.at("symbol"));
-        const OrderBookSnapshot* book_snap = nullptr;
-        for (const auto& [sym, book] : snap->books) {
-            if (to_lower(sym) == requested) {
-                book_snap = &book;
-                break;
-            }
-        }
-
-        if (!book_snap) {
+        auto idx_it = snap->symbol_index.find(requested);
+        if (idx_it == snap->symbol_index.end()) {
             res.status = 404;
             res.set_content(
                 json{{"error", "instrument not found: " +
@@ -250,10 +238,12 @@ void RestServer::setup_routes() {
                 "application/json");
             return;
         }
+        const OrderBookSnapshot* book_snap = &snap->books.at(idx_it->second);
 
         json best_bid = nullptr;
         json best_ask = nullptr;
         json spread   = nullptr;
+        bool crossed  = false;
 
         if (!book_snap->bids.empty()) {
             const auto& b = book_snap->bids.front();
@@ -274,13 +264,15 @@ void RestServer::setup_routes() {
         }
 
         if (!book_snap->bids.empty() && !book_snap->asks.empty()) {
-            // Fixed-point spread: convert display doubles back to raw,
-            // subtract, convert once — avoids IEEE 754 noise
-            uint32_t ask_raw = static_cast<uint32_t>(
+            // Fixed-point spread via signed arithmetic so a crossed book
+            // (ask < bid — legal during auctions/halts) produces a negative
+            // value rather than wrapping around UINT32_MAX.
+            int32_t ask_raw = static_cast<int32_t>(
                 book_snap->asks.front().price * 10000.0 + 0.5);
-            uint32_t bid_raw = static_cast<uint32_t>(
+            int32_t bid_raw = static_cast<int32_t>(
                 book_snap->bids.front().price * 10000.0 + 0.5);
-            spread = (ask_raw - bid_raw) / 10000.0;
+            crossed = ask_raw < bid_raw;
+            spread  = (ask_raw - bid_raw) / 10000.0;
         }
 
         json j;
@@ -292,6 +284,7 @@ void RestServer::setup_routes() {
         j["best_bid"]             = best_bid;
         j["best_ask"]             = best_ask;
         j["spread"]               = spread;
+        j["crossed"]              = crossed;
         res.set_content(j.dump(), "application/json");
     });
 }
